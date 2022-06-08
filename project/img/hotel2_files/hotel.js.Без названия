@@ -1,0 +1,402 @@
+
+$(document).ready(function () {
+
+    $(document).delegate("a.pov", "click", function () {
+        var el = $(this);
+        m.calculatePoint(el.data("selector"));
+        return false;
+    });
+    $(document).delegate("a.pov", "mouseenter", function () {
+        var el = $(this);
+        m.showPoint(el.data("selector"));
+        return false;
+    });
+    $(document).delegate("a.pov", "mouseleave", function () {
+        var el = $(this);
+        m.hidePoint(el.data("selector"));
+        return false;
+    });
+//  tabs
+    $(document).delegate("a.h-tabs__item", "click", function () {
+        var el = $(this);
+        if (el.hasClass("is-active") == true)
+            return false;
+        $(".h-tabs__list .is-active").removeClass("is-active");
+        el.addClass("is-active");
+        el.closest(".h-tabs").find(".h-tabs__inner > div").addClass("is-hide");
+        $(el.attr("href")).removeClass("is-hide");
+        switch (el.attr("href")) {
+            case '#is-guest':
+                if (images.loaded == false)
+                    images.get();
+                break;
+            case '#is-street':
+                street.init();
+                break;
+        }
+        return false;
+    });
+    $('.h-map__link').on('click', function () {
+        var el = $(this);
+        $(".h-map__pop h4").html(points[el.data('group')].name);
+        $(".h-map__pop .jspPane").html("<ul></ul>");
+        var xpoints = false;
+        for (i in points) {
+//console.log(points[i].name + " > " + el.find(".h-map__name").html());
+            if (points[i].name == el.find(".h-map__name").html())
+                xpoints = points[i];
+        }
+        for (i in xpoints.points) {
+            var point = xpoints.points[i];
+            $(".h-map__pop .jspPane ul").append("<li><a class=\"pov\" href=\"#\" data-selector=\"" + point.id + "\"><span>" + point.name + "</span></a></li>");
+        }
+        $('.h-map__pop').addClass('is-open');
+        m.activateLayer(points[el.data('group')].name);
+        return false;
+    });
+    $('.js-close-pop').on('click', function () {
+        $('.h-map__pop').removeClass('is-open');
+        m.deactivateLayer();
+        return false;
+    });
+    m.init();
+});
+//  images
+$(document).delegate("#is-guest .h-btn_mod", "click", function () {
+    images.get();
+    return false;
+});
+var images = {
+    loaded: false,
+    perPage: 5,
+    page_id: 0,
+    stored: [],
+    get: function () {
+        $("#is-guest .h-btn_mod").hide();
+        $.post($("#is-guest").data("endpoint"),
+                {
+                    'hotel': $("#hmap").data("hotel"),
+                    'point': $("#hmap").data("points"),
+                    'page': images.page_id
+                }, function (data) {
+            if (data.success == false || data.media == false) {
+                if (images.stored == false) {
+                    $("#is-guest").html("<h3 style=\"text-align:center;\">К сожалению, фотографий нет</h3>");
+                }
+            } else {
+                images.loaded = true;
+                if (data.media != false) {
+                    for (i in data.media.media) {
+                        images.stored.push(data.media.media[i]);
+                    }
+                    if (data.media.next_id) {
+                        images.page_id = data.media.next_id;
+                        $("#is-guest .h-btn_mod").show();
+                    }
+                    images.build();
+                }
+            }
+        });
+    },
+    build: function () {
+        var html = "";
+        var blocks = {};
+        var block_id = 0;
+        for (i in images.stored) {
+            var img = images.stored[i];
+            if (typeof (blocks[block_id]) == "undefined") {
+                blocks[block_id] = [];
+            }
+            if (blocks[block_id].length < 5) {
+                blocks[block_id].push(img);
+            } else {
+                block_id++;
+                if (typeof (blocks[block_id]) == "undefined") {
+                    blocks[block_id] = [];
+                }
+                blocks[block_id].push(img);
+            }
+        }
+        for (x in blocks) {
+            if ((x + 1) / 2 >> 0) {
+                //  right
+                html = html + "<div class=\"h-photo h-photo_mod h-photo_right\">";
+            } else {
+                // left
+                html = html + "<div class=\"h-photo h-photo_mod\">";
+            }
+            for (n in blocks[x]) {
+                var img = blocks[x][n];
+                html = html + "<div class=\"h-photo__" + (n == 0 ? "big" : "med") + "2\"><div title=\"@" + img.user + " / " + img.created + "\" style=\"background-image: url('" + img.url + "');\"></div></div>";
+            }
+            html = html + "</div>";
+        }
+        $("#is-guest .h-photo").remove();
+        $("#is-guest").prepend(html);
+    }
+};
+//  streets
+var street = {
+    panorama: {},
+    init: function initialize() {
+        var sv = new google.maps.StreetViewService();
+        street.panorama = new google.maps.StreetViewPanorama(document.getElementById('pano'));
+        var x = $("#map_canvas").data("coords").split(",");
+        var hpoint = new google.maps.LatLng(x[0], x[1]);
+        sv.getPanoramaByLocation(hpoint, 50, street.processSVData);
+    },
+    processSVData: function (data, status) {
+        if (status == google.maps.StreetViewStatus.OK) {
+            street.panorama.setPano(data.location.pano);
+            street.panorama.setPov({
+                heading: 270,
+                pitch: 0
+            });
+            street.panorama.setVisible(true);
+        } else {
+            alert('Street View data not found for this location.');
+        }
+    }
+}
+
+
+
+//  map
+var m = {
+    map: false,
+    htl: $("#map_canvas").data("coords").split(","),
+    markers: false,
+    activeLayer: false,
+    layers: [],
+    hotel: false,
+    searchRoute: false,
+    route: false,
+    highPoint: false,
+    info: false,
+    init: function () {
+//  map
+        m.htl = [m.htl[0], m.htl[1]];
+        m.map = L.map('map_canvas', {
+            scrollWheelZoom: false,
+            center: m.htl,
+            zoom: 13
+        });
+        var googleLayer = new L.Google('ROADMAP');
+        m.map.addLayer(googleLayer);
+        m.addHotel();
+        m.map._onResize();
+        m.map.invalidateSize(false);
+    },
+    addHotel: function () {
+        m.hotel = L.marker(m.htl).bindPopup("<b>" + $(".h-block__left h1:first").text() + "</b>").addTo(m.map);
+    },
+    deactivateLayer: function () {
+        if (m.activeLayer != false) {
+            for (x in m.layers[m.activeLayer]) {
+                m.map.removeLayer(m.layers[m.activeLayer][x]);
+            }
+            var index = m.layers.indexOf(m.activeLayer);
+            if (index > -1) {
+                m.layers.splice(index, 1);
+            }
+        }
+        m.layers[name + "_act"] = [];
+        m.activeLayer = false;
+        m.map.setView(m.htl, 13);
+        m.removeInfo();
+    },
+    activateLayer: function (name) {
+        if (m.activeLayer != false) {
+            for (x in m.layers[m.activeLayer]) {
+                m.map.removeLayer(m.layers[m.activeLayer][x]);
+            }
+            var index = m.layers.indexOf(m.activeLayer);
+            if (index > -1) {
+                m.layers.splice(index, 1);
+            }
+        }
+        //m.map.removeLayer(m.layers[name]);
+        m.layers[name + "_act"] = [];
+        m.activeLayer = name + "_act";
+        var xpoints = false;
+        for (i in points) {
+            if (points[i].name == name)
+                xpoints = points[i];
+        }
+        var bnd = [];
+        for (i in xpoints.points) {
+            var point = xpoints.points[i];
+            m.layers[name + "_act"][i] = new L.circleMarker(
+                    [point.lon, point.lat],
+                    {
+                        xname: point.name,
+                        lon: point.lon,
+                        lat: point.lat,
+                        pid: point.id,
+                        opacity: 1,
+                        weight: 2,
+                        color: '#fff',
+                        fillColor: xpoints.color,
+                        fillOpacity: 1
+                    }
+            ).setRadius(6).bindPopup(point.name, {
+                closeButton: false,
+                offset: new L.Point(0, -8),
+                classname: 'epronto-popup'
+            }).on('mouseover', function (e) {
+                this.openPopup();
+            }).on('mouseout', function (e) {
+                this.closePopup();
+            });
+            bnd.push(new L.LatLngBounds([
+                [point.lon, point.lat]
+            ]));
+        }
+        bnd.push(new L.LatLngBounds([
+            m.htl
+        ]));
+        L.layerGroup(m.layers[name + "_act"])
+                .addTo(m.map);
+        m.map.fitBounds(bnd, {padding: [10, 10]});
+    },
+    addLayer: function (points) {
+        m.layers[points.name] = [];
+        for (i in points.points) {
+            var point = points.points[i];
+            m.layers[points.name][i] = new L.circleMarker(
+                    [point.lon, point.lat],
+                    {
+                        xname: point.name,
+                        pid: point.id,
+                        opacity: 0.3,
+                        weight: 1,
+                        color: '#fff',
+                        fillColor: points.color,
+                        fillOpacity: 0.6
+                    }
+            ).setRadius(2);
+        }
+        L.layerGroup(m.layers[points.name])
+                .addTo(m.map);
+    },
+    populate: function () {
+        for (t in points) {
+            m.addLayer(points[t]);
+        }
+    },
+    hidePoint: function (selector) {
+        m.map.removeLayer(m.highPoint);
+    },
+    showPoint: function (selector) {
+        var point = false;
+        for (i in points) {
+            if (points[i].name == m.activeLayer.replace("_act", "")) {
+                for (x in points[i].points) {
+                    if (points[i].points[x].id == selector)
+                        point = points[i].points[x];
+                }
+            }
+        }
+        var xpoint = false;
+        for (i in m.layers[m.activeLayer]) {
+            var mpoint = m.layers[m.activeLayer][i];
+            if (mpoint.options.pid == selector) {
+                //mpoint.openPopup();
+                m.highPoint = new L.circleMarker(
+                        [mpoint.options.lon, mpoint.options.lat],
+                        {
+                            opacity: 0.3,
+                            weight: 1,
+                            color: '#000',
+                            fillColor: points.color,
+                            fillOpacity: 0.3
+                        }
+                ).setRadius(20);
+                m.map.addLayer(m.highPoint);
+                m.removeInfo();
+                /*var bounds = new L.LatLngBounds([
+                 [point.lon, point.lat],
+                 m.htl
+                 ]);
+                 m.map.fitBounds(bounds, {padding: [30, 30]});*/
+                //xpoint.openPopup();
+
+
+            }
+        }
+        //m.map._onResize();
+        m.map.invalidateSize(false);
+    },
+    calculatePoint: function (selector) {
+        var point = false;
+        for (i in points) {
+            if (points[i].name == m.activeLayer.replace("_act", "")) {
+                for (x in points[i].points) {
+                    if (points[i].points[x].id == selector)
+                        point = points[i].points[x];
+                }
+            }
+        }
+        var distance = m.calcCrow(m.htl[1], m.htl[0], point.lat, point.lon).toFixed(2);
+        if (m.info == false) {
+            m.createInfo();
+        }
+        bounds = new L.LatLngBounds([
+            [point.lon, point.lat],
+            m.htl
+        ]);
+        m.map.fitBounds(bounds, {padding: [10, 10]});
+        var time = ((distance * 1000) / 3276).toFixed(2);
+        m.setInfo(distance, time);
+    },
+    createInfo: function () {
+        $(".h-map-wrapper").prepend("<div class=\"routeinfo\"><div class=\"cont\"><p>Расстояние: <strong class=\"distance\"></strong></p><p>Время пешком: <strong class=\"time\"></strong></p></div></div>");
+        m.info = true;
+    },
+    removeInfo: function () {
+        $(".h-map-wrapper .routeinfo").remove();
+        m.info = false;
+    },
+    setInfo: function (distance, time) {
+        var result = distance + " км";
+        if (distance < 1) {
+            result = (distance * 1000).toFixed(0) + " м";
+        }
+        var minutes = getDecimal(time);
+        if (minutes > 0) {
+            time = (time - minutes).toFixed(0);
+            minutes = (minutes * 60).toFixed(0);
+        }
+        $(".routeinfo .distance").html(result);
+        $(".routeinfo .time").html((time > 0 ? time + " ч" : "") + (minutes ? " " + minutes + " мин" : ""));
+    },
+    //This function takes in latitude and longitude of two location and returns the distance between them as the crow flies (in km)
+    calcCrow: function (lat1, lon1, lat2, lon2)
+    {
+        var R = 6371; // km
+        var dLat = m.toRad(lat2 - lat1);
+        var dLon = m.toRad(lon2 - lon1);
+        var lat1 = m.toRad(lat1);
+        var lat2 = m.toRad(lat2);
+
+        var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
+        var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        var d = R * c;
+        return d;
+    },
+    // Converts numeric degrees to radians
+    toRad: function (Value)
+    {
+        return Value * Math.PI / 180;
+    }
+};
+
+function getDecimal(num) {
+    var str = "" + num;
+    var zeroPos = str.indexOf(".");
+    if (zeroPos == -1)
+        return 0;
+    str = str.slice(zeroPos);
+    return +str;
+}
